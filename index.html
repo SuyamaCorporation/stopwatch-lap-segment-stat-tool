@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ラップ分析 ストップウォッチ</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+<div class="max-w-3xl mx-auto p-4">
+  <h1 class="text-2xl font-bold text-gray-800 mb-4">ラップ分析 ストップウォッチ</h1>
+
+  <!-- タイマー表示 -->
+  <div class="bg-white rounded-2xl shadow-md p-6 text-center mb-4">
+    <div id="display" class="text-6xl font-mono font-bold text-gray-900 tabular-nums">00:00:00.00</div>
+    <div class="flex justify-center gap-3 mt-6 flex-wrap">
+      <button id="btn-start" onclick="startStop()" aria-label="スタート/ストップ"
+        class="px-8 py-3 bg-green-500 text-white rounded-full font-bold text-lg hover:bg-green-600 transition-colors min-w-[120px]">
+        スタート
+      </button>
+      <button id="btn-lap" onclick="recordLap()" disabled aria-label="ラップ記録"
+        class="px-8 py-3 bg-blue-500 text-white rounded-full font-bold text-lg hover:bg-blue-600 transition-colors disabled:opacity-40 disabled:cursor-not-allowed min-w-[120px]">
+        ラップ
+      </button>
+      <button id="btn-reset" onclick="reset()" aria-label="リセット"
+        class="px-8 py-3 bg-gray-400 text-white rounded-full font-bold text-lg hover:bg-gray-500 transition-colors min-w-[120px]">
+        リセット
+      </button>
+    </div>
+  </div>
+
+  <!-- 統計 -->
+  <div id="stats-section" class="hidden bg-white rounded-xl shadow-md p-4 mb-4">
+    <h2 class="text-sm font-semibold text-gray-600 uppercase mb-3">統計</h2>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div class="bg-green-50 rounded-lg p-3 text-center">
+        <div class="text-xs text-green-600 font-medium">最速ラップ</div>
+        <div id="stat-fastest" class="text-lg font-mono font-bold text-green-700">--:--.-</div>
+      </div>
+      <div class="bg-red-50 rounded-lg p-3 text-center">
+        <div class="text-xs text-red-600 font-medium">最遅ラップ</div>
+        <div id="stat-slowest" class="text-lg font-mono font-bold text-red-700">--:--.-</div>
+      </div>
+      <div class="bg-blue-50 rounded-lg p-3 text-center">
+        <div class="text-xs text-blue-600 font-medium">平均ラップ</div>
+        <div id="stat-avg" class="text-lg font-mono font-bold text-blue-700">--:--.-</div>
+      </div>
+      <div class="bg-purple-50 rounded-lg p-3 text-center">
+        <div class="text-xs text-purple-600 font-medium">合計</div>
+        <div id="stat-total" class="text-lg font-mono font-bold text-purple-700">--:--.-</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- グラフ -->
+  <div id="chart-section" class="hidden bg-white rounded-xl shadow-md p-4 mb-4">
+    <h2 class="text-sm font-semibold text-gray-600 uppercase mb-3">ラップタイム棒グラフ</h2>
+    <div id="bar-chart" class="flex items-end gap-1 h-32"></div>
+  </div>
+
+  <!-- ラップテーブル -->
+  <div id="lap-section" class="hidden bg-white rounded-xl shadow-md p-4 mb-4">
+    <div class="flex justify-between items-center mb-3">
+      <h2 class="text-sm font-semibold text-gray-600 uppercase">ラップ記録</h2>
+      <button onclick="exportCSV()" aria-label="CSVエクスポート"
+        class="px-3 py-1.5 text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 rounded border border-gray-300 font-medium">
+        CSV エクスポート
+      </button>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-xs text-gray-500 border-b border-gray-200">
+            <th class="text-left py-2 pr-4">No.</th>
+            <th class="text-right py-2 px-4">ラップタイム</th>
+            <th class="text-right py-2 px-4">スプリット</th>
+          </tr>
+        </thead>
+        <tbody id="lap-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+let running = false;
+let startTime = 0;
+let elapsed = 0;
+let lapStart = 0;
+let animFrame = null;
+let laps = [];
+
+const STORAGE_KEY = 'stopwatch_laps_v1';
+
+function loadLaps() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      const data = JSON.parse(saved);
+      laps = data.laps || [];
+      elapsed = data.elapsed || 0;
+      if (laps.length > 0) {
+        updateDisplay(elapsed);
+        updateLapTable();
+        updateStats();
+        updateChart();
+        document.getElementById('stats-section').classList.remove('hidden');
+        document.getElementById('chart-section').classList.remove('hidden');
+        document.getElementById('lap-section').classList.remove('hidden');
+      }
+    }
+  } catch(e) {}
+}
+
+function saveLaps() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ laps, elapsed }));
+}
+
+function formatTime(ms) {
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  const cs = Math.floor((ms % 1000) / 10);
+  return (h > 0 ? String(h).padStart(2,'0') + ':' : '') +
+    String(m).padStart(2,'0') + ':' +
+    String(s).padStart(2,'0') + '.' +
+    String(cs).padStart(2,'0');
+}
+
+function formatLapTime(ms) {
+  const m = Math.floor(ms / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  const cs = Math.floor((ms % 1000) / 10);
+  return String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0') + '.' + String(cs).padStart(2,'0');
+}
+
+function updateDisplay(ms) {
+  document.getElementById('display').textContent = formatTime(ms);
+}
+
+function startStop() {
+  if (!running) {
+    running = true;
+    startTime = Date.now() - elapsed;
+    lapStart = lapStart === 0 ? startTime : lapStart;
+    document.getElementById('btn-start').textContent = 'ストップ';
+    document.getElementById('btn-start').className = 'px-8 py-3 bg-red-500 text-white rounded-full font-bold text-lg hover:bg-red-600 transition-colors min-w-[120px]';
+    document.getElementById('btn-lap').disabled = false;
+    tick();
+  } else {
+    running = false;
+    elapsed = Date.now() - startTime;
+    cancelAnimationFrame(animFrame);
+    document.getElementById('btn-start').textContent = 'スタート';
+    document.getElementById('btn-start').className = 'px-8 py-3 bg-green-500 text-white rounded-full font-bold text-lg hover:bg-green-600 transition-colors min-w-[120px]';
+    document.getElementById('btn-lap').disabled = true;
+  }
+}
+
+function tick() {
+  if (!running) return;
+  elapsed = Date.now() - startTime;
+  updateDisplay(elapsed);
+  animFrame = requestAnimationFrame(tick);
+}
+
+function recordLap() {
+  if (!running) return;
+  const now = Date.now();
+  const lapTime = now - (lapStart || startTime);
+  lapStart = now;
+  const split = now - startTime;
+  laps.unshift({ num: laps.length + 1, lapTime, split });
+  updateLapTable();
+  updateStats();
+  updateChart();
+  saveLaps();
+  document.getElementById('stats-section').classList.remove('hidden');
+  document.getElementById('chart-section').classList.remove('hidden');
+  document.getElementById('lap-section').classList.remove('hidden');
+}
+
+function reset() {
+  running = false;
+  cancelAnimationFrame(animFrame);
+  elapsed = 0;
+  startTime = 0;
+  lapStart = 0;
+  laps = [];
+  updateDisplay(0);
+  document.getElementById('btn-start').textContent = 'スタート';
+  document.getElementById('btn-start').className = 'px-8 py-3 bg-green-500 text-white rounded-full font-bold text-lg hover:bg-green-600 transition-colors min-w-[120px]';
+  document.getElementById('btn-lap').disabled = true;
+  document.getElementById('lap-tbody').innerHTML = '';
+  document.getElementById('bar-chart').innerHTML = '';
+  document.getElementById('stats-section').classList.add('hidden');
+  document.getElementById('chart-section').classList.add('hidden');
+  document.getElementById('lap-section').classList.add('hidden');
+  localStorage.removeItem(STORAGE_KEY);
+}
+
+function updateLapTable() {
+  const fastestTime = Math.min(...laps.map(l => l.lapTime));
+  const slowestTime = Math.max(...laps.map(l => l.lapTime));
+  const tbody = document.getElementById('lap-tbody');
+  tbody.innerHTML = '';
+  laps.forEach(lap => {
+    const isFastest = lap.lapTime === fastestTime && laps.length > 1;
+    const isSlowest = lap.lapTime === slowestTime && laps.length > 1;
+    const tr = document.createElement('tr');
+    tr.className = 'border-b border-gray-100 ' +
+      (isFastest ? 'bg-green-50' : isSlowest ? 'bg-red-50' : '');
+    const badge = isFastest ? ' <span class="text-xs bg-green-100 text-green-700 px-1 rounded">最速</span>' :
+                  isSlowest ? ' <span class="text-xs bg-red-100 text-red-700 px-1 rounded">最遅</span>' : '';
+    tr.innerHTML =
+      '<td class="py-2 pr-4 text-gray-600 font-medium">Lap ' + escapeHtml(lap.num) + badge + '</td>' +
+      '<td class="py-2 px-4 text-right font-mono font-bold ' + (isFastest ? 'text-green-700' : isSlowest ? 'text-red-700' : 'text-gray-800') + '">' + escapeHtml(formatLapTime(lap.lapTime)) + '</td>' +
+      '<td class="py-2 px-4 text-right font-mono text-gray-500">' + escapeHtml(formatLapTime(lap.split)) + '</td>';
+    tbody.appendChild(tr);
+  });
+}
+
+function updateStats() {
+  if (laps.length === 0) return;
+  const times = laps.map(l => l.lapTime);
+  const fastest = Math.min(...times);
+  const slowest = Math.max(...times);
+  const avg = times.reduce((a,b) => a+b, 0) / times.length;
+  const total = times.reduce((a,b) => a+b, 0);
+  document.getElementById('stat-fastest').textContent = formatLapTime(fastest);
+  document.getElementById('stat-slowest').textContent = formatLapTime(slowest);
+  document.getElementById('stat-avg').textContent = formatLapTime(avg);
+  document.getElementById('stat-total').textContent = formatLapTime(total);
+}
+
+function updateChart() {
+  const chart = document.getElementById('bar-chart');
+  chart.innerHTML = '';
+  if (laps.length === 0) return;
+  const times = laps.map(l => l.lapTime);
+  const max = Math.max(...times);
+  const min = Math.min(...times);
+  const reversed = [...laps].reverse();
+  reversed.forEach(lap => {
+    const pct = max > 0 ? (lap.lapTime / max * 100) : 0;
+    const isFastest = lap.lapTime === min && laps.length > 1;
+    const isSlowest = lap.lapTime === max && laps.length > 1;
+    const bar = document.createElement('div');
+    bar.className = 'flex flex-col items-center flex-1 min-w-0';
+    const barInner = document.createElement('div');
+    barInner.style.height = pct + '%';
+    barInner.style.minHeight = '4px';
+    barInner.className = 'w-full rounded-t ' +
+      (isFastest ? 'bg-green-400' : isSlowest ? 'bg-red-400' : 'bg-blue-400');
+    barInner.title = 'Lap ' + lap.num + ': ' + formatLapTime(lap.lapTime);
+    const label = document.createElement('div');
+    label.className = 'text-xs text-gray-400 mt-1 truncate w-full text-center';
+    label.textContent = lap.num;
+    bar.appendChild(barInner);
+    bar.appendChild(label);
+    chart.appendChild(bar);
+  });
+}
+
+function exportCSV() {
+  if (laps.length === 0) return;
+  let csv = 'ラップNo.,ラップタイム(ms),スプリット(ms),ラップタイム,スプリット\n';
+  [...laps].reverse().forEach(lap => {
+    csv += lap.num + ',' + lap.lapTime + ',' + lap.split + ',' +
+      formatLapTime(lap.lapTime) + ',' + formatLapTime(lap.split) + '\n';
+  });
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'stopwatch_laps.csv';
+  a.click();
+}
+
+loadLaps();
+</script>
+</body>
+</html>
